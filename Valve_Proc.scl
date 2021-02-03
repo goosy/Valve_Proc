@@ -1,291 +1,339 @@
 FUNCTION_BLOCK "Valve_Proc"
-TITLE='有阀位电动执行机构'
-VERSION:'0.10'
+TITLE='电动执行机构：阀位反馈、开关2DO输出'
+VERSION:'0.12'
 KNOW_HOW_PROTECT
 AUTHOR:Goosy
-NAME:Valve_Proc
-FAMILY:Valve
+NAME:ValvePrc
+FAMILY:GooLib
+
+CONST
+    S7_ZERO := 0;
+    S7_SPAN := 27648;
+    S7_AI_MIN := -32768;
+    S7_AI_MAX := 32767;
+    STOP_STATUS := W#16#0;
+    CLOSE_STATUS := W#16#1;
+    OPEN_STATUS := W#16#2;
+    MARCH_STATUS :=  W#16#8;
+END_CONST
 
 VAR_INPUT 
     CP {S7_m_c := 'true'} : BOOL;   // 全关位
     OP {S7_m_c := 'true'} : BOOL;   // 全开位
-    Remote {S7_m_c := 'true'} : BOOL;   // 远程
-    Error {S7_m_c := 'true'} : BOOL;   // 错误
-    VP_raw {S7_m_c := 'true'} : INT;   // 模拟量采集值
-    zero_raw {S7_m_c := 'true'} : INT := 0;   // 零点原始值（4mA对应数值）0
-    span_raw {S7_m_c := 'true'} : INT := 27648;   // 极值原始值（20mA对应数值）27648
-    overflow_radius {S7_m_c := 'true'} : INT := 500;   // 溢出半径
-    VP_low {S7_m_c := 'true'} : REAL := 0.0;   // 量程低值
-    VP_high {S7_m_c := 'true'} : REAL := 100.0;   // 量程高值
-    invalidValue {S7_m_c := 'true'} : REAL := -1000000.0;   // 无效输入时指定输出值
-    highAlarm {S7_m_c := 'true'} : REAL := 80.0;   // 高高报设定值
-    highWarn {S7_m_c := 'true'} : REAL := 70.0;   // 高报设定值
-    lowWarn {S7_m_c := 'true'} : REAL := 2.0;   // 低报设定值
-    lowAlarm {S7_m_c := 'true'} : REAL := 1.0;   // 低低报设定值
-    dead_zone_radius {S7_m_c := 'true'} : REAL := 0.5;   // 死区半径 （赋值0.0时无死区）
-    fault_tolerance_time {S7_m_c := 'true'} : TIME := T#0MS;   // 容错时间 (单位毫秒 赋值T#0MS时无容错时间)
+    remote {S7_m_c := 'true'} : BOOL;   // 远程
+    error {S7_m_c := 'true'} : BOOL;   // 错误
+    VP_raw {S7_m_c := 'true'} : INT;   // 阀位采集值
+    zero_raw {S7_m_c := 'true'} : INT := S7_ZERO;   // 零点原始值（4mA对应数值）0
+    span_raw {S7_m_c := 'true'} : INT := S7_SPAN;   // 极值原始值（20mA对应数值）27648
+    overflow_SP {S7_m_c := 'true'} : INT := 28000;   // 上溢出值
+    underflow_SP {S7_m_c := 'true'} : INT := -500;   // 下溢出值
+    march_FT {S7_m_c := 'true'} : REAL := 0.5;   // 执行指定阀位容错值
+    zero {S7_m_c := 'true'} : REAL := 0.0;   // 量程低值
+    span {S7_m_c := 'true'} : REAL := 100.0;   // 量程高值
+    invalid_value {S7_m_c := 'true'} : REAL := -1000000.0;   // 无效输入时指定输出值
+    VP_SP {S7_m_c:='true'} : REAL := 50.0; //设定值
+    AH_limit {S7_m_c := 'true'} : REAL := 80.0;   // 高高报设定值
+    WH_limit {S7_m_c := 'true'} : REAL := 70.0;   // 高报设定值
+    WL_limit {S7_m_c := 'true'} : REAL := 2.0;   // 低报设定值
+    AL_limit {S7_m_c := 'true'} : REAL := 1.0;   // 低低报设定值
+    dead_zone {S7_m_c := 'true'} : REAL := 0.5;   // 死区 （赋值0.0时无死区）
+    FT_time {S7_m_c := 'true'} : TIME := T#0MS;   // 容错时间 (单位毫秒 赋值T#0MS时无容错时间)
 END_VAR
 
 VAR_IN_OUT
-     close_cmd {S7_m_c := 'true'} : BOOL;   // 关阀命令
-     open_cmd {S7_m_c := 'true'} : BOOL;   // 开阀命令
-     stop_cmd {S7_m_c := 'true'} : BOOL;   // 停止命令
+    close_cmd {S7_m_c := 'true'} : BOOL;   // 关阀命令
+    open_cmd {S7_m_c := 'true'} : BOOL;   // 开阀命令
+    march_cmd {S7_m_c := 'true'} : BOOL;   // 执行指定阀位
+    stop_cmd {S7_m_c := 'true'} : BOOL;   // 停止命令
 END_VAR
 
 VAR_OUTPUT
-    CV {S7_m_c := 'true'} : BOOL;   // 正在执行关阀
-    OV {S7_m_c := 'true'} : BOOL;   // 正在执行开阀
     VP {S7_m_c := 'true'} : REAL;   // 采集量工程单位数值
-    highAlarm_flag {S7_m_c := 'true'} : BOOL;   // 高高报标志
-    highWarn_flag {S7_m_c := 'true'} : BOOL;   // 高报标志
-    lowWarn_flag {S7_m_c := 'true'} : BOOL;   // 低报标志
-    lowAlarm_flag {S7_m_c := 'true'} : BOOL;   // 低低报标志
-    highOverflow {S7_m_c := 'true'} : BOOL;   // 高溢出
-    lowOverflow {S7_m_c := 'true'} : BOOL;   // 低溢出
-    set_error {S7_m_c := 'true'} : BOOL;   // 错误
-    reserve : BOOL;   // 预留
+    close_action {S7_m_c := 'true'} : BOOL;   // 正在执行关阀
+    open_action {S7_m_c := 'true'} : BOOL;   // 正在执行开阀
+    AH_flag {S7_m_c := 'true'} : BOOL;   // 高高报标志
+    WH_flag {S7_m_c := 'true'} : BOOL;   // 高报标志
+    WL_flag {S7_m_c := 'true'} : BOOL;   // 低报标志
+    AL_flag {S7_m_c := 'true'} : BOOL;   // 低低报标志
+    overflow_flag {S7_m_c := 'true'} : BOOL;   // 高溢出
+    underflow_flag {S7_m_c := 'true'} : BOOL;   // 低溢出
+    invalid {S7_m_c:='true'} : BOOL := 0;   //阀位值无效
+    VP_error {S7_m_c:='true'} : BOOL := 0;   //阀位无法测量，比如断线
+    SP_error {S7_m_c := 'true'} : BOOL;   // 设置错误
 END_VAR
 
 VAR
-    trigger_highAlarm : BOOL;   // 触发高高报
-    trigger_highWarn : BOOL;   // 触发高报
-    trigger_lowWarn : BOOL;   // 触发低报
-    trigger_lowAlarm : BOOL;   // 触发低低报
-    highAlarm_set : TON;
-    highAlarm_reset : TOF;
-    highWarn_set : TON;
-    highWarn_reset : TOF;
-    lowWarn_set : TON;
-    lowWarn_reset : TOF;
-    lowAlarm_set : TON;
-    lowAlarm_reset : TOF;
+    trigger_AH : BOOL;   // 触发高高报
+    trigger_WH : BOOL;   // 触发高报
+    trigger_WL : BOOL;   // 触发低报
+    trigger_AL : BOOL;   // 触发低低报
+    mode : WORD; //当前模式 0x0:stop 0x1:close 0x2:open 0x4:march
+    AH_flag_set : TON;
+    AH_flag_reset : TOF;
+    WH_flag_set : TON;
+    WH_flag_reset : TOF;
+    WL_flag_set : TON;
+    WL_flag_reset : TOF;
+    AL_flag_set : TON;
+    AL_flag_reset : TOF;
 END_VAR
 
 VAR_TEMP
-    tempPV : Real;
-    highAlarm_H : Real;   // 高高限死区高侧
-    highAlarm_L : Real;   // 高高限死区低侧
-    highWarn_H : Real;   // 高限死区高侧
-    highWarn_L : Real;   // 高限死区低侧
-    lowWarn_H : Real;   // 低限死区高侧
-    lowWarn_L : Real;   // 低限死区低侧
-    lowAlarm_H : Real;   // 低低限死区高侧
-    lowAlarm_L : Real;   // 低低限死区低侧
+    value : Real;
+    ERR : BOOL ;
+    OVFL : BOOL ;
+    UDFL : BOOL ;
 END_VAR
 
-
 BEGIN
-
-
+    // ----阀动作处理
     // 取消动作
-    IF stop_cmd OR NOT Remote OR Error THEN
+    IF stop_cmd OR NOT remote OR error THEN // stop first
         open_cmd := FALSE;
         close_cmd := FALSE;
-        OV := FAlSE;
-        CV := FALSE;
+        march_cmd := FALSE;
+        open_action := FAlSE;
+        close_action := FALSE;
         stop_cmd := FALSE;
-    END_IF;
-    
-    // 清除命令错误
-    IF open_cmd AND close_cmd THEN
-        open_cmd := FALSE;
-        close_cmd := FALSE;
+        mode := STOP_STATUS;
     END_IF;
     
     // 开阀完成
     IF OP THEN
         open_cmd := FALSE;
-        OV := FALSE;
+        open_action := FALSE;
+        IF mode = OPEN_STATUS THEN
+            mode := STOP_STATUS;
+        END_IF;
     END_IF;
-    
+
     // 关阀完成
     IF CP THEN
         close_cmd := FALSE;
-        CV := FALSE;
+        close_action := FALSE;
+        IF mode = CLOSE_STATUS THEN
+            mode := STOP_STATUS;
+        END_IF;
     END_IF;
     
     // 开阀
-    IF open_cmd THEN
-        OV := TRUE;
-        CV := FALSE;
+    IF open_cmd AND mode <> OPEN_STATUS THEN
+        open_action := TRUE;
+        close_action := FALSE;
+        close_cmd := FALSE;
+        march_cmd := FALSE;
+        mode := OPEN_STATUS;
+    ELSIF mode = OPEN_STATUS THEN
+        open_action := TRUE;
+        close_action := FAlSE;
     END_IF;
     
     // 关阀
-    IF close_cmd THEN
-        CV := TRUE;
-        OV := FALSE;
+    IF close_cmd AND mode <> CLOSE_STATUS THEN
+        close_action := TRUE;
+        open_action := FALSE;
+        open_cmd := FAlSE;
+        march_cmd := FAlSE;
+        mode := CLOSE_STATUS;
+    ELSIF mode = CLOSE_STATUS THEN
+        close_action := TRUE;
+        open_action := FALSE;
     END_IF;
     
-    // 阀位处理
+    IF march_cmd AND mode <> MARCH_STATUS THEN
+        open_cmd := FALSE;
+        close_cmd := FALSE;
+        mode := MARCH_STATUS;
+    ELSIF mode = MARCH_STATUS THEN
+        IF VP > VP_SP + march_FT THEN
+            close_action := TRUE;
+            open_action := FALSE;
+        ELSIF VP < VP_SP - march_FT THEN
+            close_action := FALSE;
+            open_action := TRUE;
+        ELSE
+            close_action := FALSE;
+            open_action := FALSE;
+            march_cmd := FALSE;
+            mode := STOP_STATUS;
+        END_IF;
+    END_IF;    
+    // ----阀动作处理结束
     
-    highOverflow := VP_raw > span_raw + overflow_radius;
-    IF highOverflow THEN
-        lowOverflow := FALSE;
-        highAlarm_flag := FALSE;
-        highWarn_flag := FALSE;
-        lowAlarm_flag := FALSE;
-        lowWarn_flag := FALSE;
-    END_IF;
-    
-    lowOverflow := VP_raw < zero_raw - overflow_radius;
-    IF lowOverflow THEN
-        highOverflow := FALSE;
-        highAlarm_flag := FALSE;
-        highWarn_flag := FALSE;
-        lowWarn_flag := FALSE;
-        lowAlarm_flag := FALSE;
-    END_IF;
-    
-    IF highOverflow OR lowOverflow THEN
-        // 溢出时不计算，直接赋值为 -1000000.0
-        VP := invalidValue;
-        tempPV := invalidValue;
+    // ----阀位反馈
+    //判断输入值的有效性
+    IF VP_raw = S7_AI_MIN OR VP_raw = S7_AI_MAX THEN
+        // 非测量输入
+        ERR := TRUE; // 输出
+        OVFL := FALSE;
+        UDFL := FALSE;
+    ELSIF VP_raw > overflow_SP THEN
+        // 高溢出
+        ERR := FALSE; 
+        OVFL := TRUE; // 输出
+        UDFL := FALSE;
+    ELSIF VP_raw < underflow_SP THEN
+        // 低溢出
+        ERR := FALSE; 
+        UDFL := TRUE; // 输出
+        OVFL:= FALSE;
     ELSE
-        VP := (VP_raw - zero_raw)
-        * (VP_high - VP_low) / (span_raw - zero_raw)
-        + VP_low;
-        tempPV := VP;
+        //正常输入
+        ERR := FALSE;
+        OVFL := FALSE;
+        UDFL := FALSE;
     END_IF;
-    
-    //计算死区值
-    highAlarm_H := highAlarm + dead_zone_radius;
-    highAlarm_L := highAlarm - dead_zone_radius;
-    highWarn_H := highWarn + dead_zone_radius;
-    highWarn_L := highWarn - dead_zone_radius;
-    lowWarn_H := lowWarn + dead_zone_radius;
-    lowWarn_L := lowWarn - dead_zone_radius;
-    lowAlarm_H := lowAlarm + dead_zone_radius;
-    lowAlarm_L := lowAlarm - dead_zone_radius;
-    
+
+    // 设置输出值
+    VP_error := ERR;
+    overflow_flag := OVFL;
+    underflow_flag := UDFL;
+    invalid := ERR OR OVFL OR UDFL;
+    IF invalid THEN
+        AH_flag := FALSE;
+        WH_flag := FALSE;
+        WL_flag := FALSE;
+        AL_flag := FALSE;
+        value := invalid_value;
+        VP := invalid_value;// 无效时不计算，直接赋值为 -1000000.0
+    ELSE
+        value := (VP_raw - zero_raw)
+               * (span - zero)
+               / (span_raw - zero_raw)
+               + zero;
+        VP := value;
+    END_IF;
+
     //参数设置错误或溢出
-    set_error := (highWarn > highAlarm)
-    OR (lowWarn > highWarn)
-    OR (lowAlarm > lowWarn)
-    OR highOverflow
-    OR lowOverflow;
-    
-    //上上限报警
-    IF NOT set_error AND (tempPV > highAlarm_H) THEN
-        trigger_highAlarm := TRUE;
-        trigger_lowAlarm := FALSE;
-        trigger_lowWarn := FALSE;
-    END_IF;
-    //上上限报警恢复
-    IF tempPV < highAlarm_L THEN
-        trigger_highAlarm := FALSE;
-    END_IF;
-    
-    //上限报警
-    IF NOT set_error AND (tempPV > highWarn_H) THEN
-        trigger_highWarn := TRUE;
-        trigger_lowAlarm := FALSE;
-        trigger_lowWarn := FALSE;
-    END_IF;
-    //上限报警恢复
-    IF tempPV < highWarn_L THEN
-        trigger_highWarn := FALSE;
-    END_IF;
-    
-    //下限报警
-    IF NOT set_error AND (tempPV < lowWarn_L) THEN
-        trigger_lowWarn := TRUE;
-        trigger_highWarn := FALSE;
-        trigger_highAlarm := FALSE;
-    END_IF;
-    //下限报警恢复
-    IF tempPV > lowWarn_H THEN
-        trigger_lowWarn := FALSE;
-    END_IF;
-    
-    //下下限报警
-    IF NOT set_error AND (tempPV < lowAlarm_L) THEN
-        trigger_lowAlarm := TRUE;
-        trigger_highWarn := FALSE;
-        trigger_highAlarm := FALSE;
-    END_IF;
-    //下下限报警恢复
-    IF tempPV > lowAlarm_H THEN
-        trigger_lowAlarm := FALSE;
-    END_IF;
+    SP_error := (WH_limit > AH_limit) OR (WL_limit > WH_limit) OR (AL_limit > WL_limit);
+    // ----阀位反馈结束
+
+    // ----报警处理
+    IF SP_error OR invalid THEN
+            trigger_AH := false;
+            trigger_WH := false;
+            trigger_WL := false;
+            trigger_AL := false;
+    ELSE
+        //上上限报警
+        IF value > AH_limit THEN
+            trigger_AH := TRUE;
+            trigger_WL := FALSE;
+            trigger_WL := FALSE;
+            trigger_AL := FALSE;
+        END_IF;
+        //上上限报警恢复
+        IF value < (AH_limit - dead_zone) THEN
+            trigger_AH := FALSE;
+        END_IF;
         
-    // 清除报警
-    IF set_error THEN
-        trigger_highAlarm := false;
-        trigger_highWarn := false;
-        trigger_lowWarn := false;
-        trigger_lowAlarm := false;
+        //上限报警
+        IF NOT trigger_AH AND value > WH_limit THEN
+            trigger_WH := TRUE;
+            trigger_WL := FALSE;
+            trigger_AL := FALSE;
+        END_IF;
+        //上限报警恢复
+        IF value < (WH_limit - dead_zone) THEN
+            trigger_WH := FALSE;
+        END_IF;
+        
+        //下下限报警
+        IF value < AL_limit THEN
+            trigger_AL := TRUE;
+            trigger_WL := FALSE;
+            trigger_WH := FALSE;
+            trigger_AH := FALSE;
+        END_IF;
+        //下下限报警恢复
+        IF value > (AL_limit + dead_zone) THEN
+            trigger_AL := FALSE;
+        END_IF;
+        
+        //下限报警
+        IF NOT trigger_AL AND (value < WL_limit) THEN
+            trigger_WL := TRUE;
+            trigger_WH := FALSE;
+            trigger_AH := FALSE;
+        END_IF;
+        //下限报警恢复
+        IF value > (WL_limit + dead_zone) THEN
+            trigger_WL := FALSE;
+        END_IF;
     END_IF;
     
-    IF fault_tolerance_time = T#0ms THEN
-        highAlarm_flag := trigger_highAlarm;
-        highWarn_flag := trigger_highWarn;
-        lowWarn_flag := trigger_lowWarn;
-        lowAlarm_flag := trigger_lowAlarm;
+    // 容错时限后输出报警标志
+    IF FT_time = T#0ms THEN
+        AH_flag := trigger_AH;
+        WH_flag := trigger_WH;
+        WL_flag := trigger_WL;
+        AL_flag := trigger_AL;
     ELSE
         // 延时置位高高报
-        highAlarm_set(
-                        IN := trigger_highAlarm,
-                        PT := fault_tolerance_time);
-        IF highAlarm_set.Q THEN
-            highAlarm_flag := TRUE;
+        AH_flag_set(
+            IN := trigger_AH,
+            PT := FT_time);
+        IF AH_flag_set.Q THEN
+            AH_flag := TRUE;
         END_IF;
 
         // 延时复位高高报
-        highAlarm_reset(
-                        IN := trigger_highAlarm,
-                        PT := fault_tolerance_time);
-        IF NOT highAlarm_reset.Q THEN
-            highAlarm_flag := FALSE;
+        AH_flag_reset(
+            IN := trigger_AH,
+            PT := FT_time);
+        IF NOT AH_flag_reset.Q THEN
+            AH_flag := FALSE;
         END_IF;
         
         // 延时置位高报
-        highWarn_set(
-                        IN := trigger_highWarn,
-                        PT := fault_tolerance_time);
-        IF highWarn_set.Q THEN
-            highWarn_flag := TRUE;
+        WH_flag_set(
+            IN := trigger_WH,
+            PT := FT_time);
+        IF WH_flag_set.Q THEN
+            WH_flag := TRUE;
         END_IF;
 
         // 延时复位高报
-        highWarn_reset(
-                        IN := trigger_highWarn,
-                        PT := fault_tolerance_time);
-        IF NOT highWarn_reset.Q THEN
-            highWarn_flag := FALSE;
+        WH_flag_reset(
+            IN := trigger_WH,
+            PT := FT_time);
+        IF NOT WH_flag_reset.Q THEN
+            WH_flag := FALSE;
         END_IF;
         
         // 延时置位低报
-        lowWarn_set(
-                        IN := trigger_lowWarn,
-                        PT := fault_tolerance_time);
-        IF lowWarn_set.Q THEN
-            lowWarn_flag := TRUE;
+        WL_flag_set(
+            IN := trigger_WL,
+            PT := FT_time);
+        IF WL_flag_set.Q THEN
+            WL_flag := TRUE;
         END_IF;
 
         // 延时复位低报
-        lowWarn_reset(
-                        IN := trigger_lowWarn,
-                        PT := fault_tolerance_time);
-        IF NOT lowWarn_reset.Q THEN
-            lowWarn_flag := FALSE;
+        WL_flag_reset(
+            IN := trigger_WL,
+            PT := FT_time);
+        IF NOT WL_flag_reset.Q THEN
+            WL_flag := FALSE;
         END_IF;
 
         // 延时置位低低报
-        lowAlarm_set(
-                        IN := trigger_lowAlarm,
-                        PT := fault_tolerance_time);
-        IF lowAlarm_set.Q THEN
-            lowAlarm_flag := TRUE;
+        AL_flag_set(
+            IN := trigger_AL,
+            PT := FT_time);
+        IF AL_flag_set.Q THEN
+            AL_flag := TRUE;
         END_IF;
         
         // 延时复位低低报
-        lowAlarm_reset(
-                        IN := trigger_lowAlarm,
-                        PT := fault_tolerance_time);
-        IF NOT lowAlarm_reset.Q THEN
-            lowAlarm_flag := FALSE;
+        AL_flag_reset(
+            IN := trigger_AL,
+            PT := FT_time);
+        IF NOT AL_flag_reset.Q THEN
+            AL_flag := FALSE;
         END_IF;
-        
+
     END_IF;
-      
+    // ----报警处理结束
+
 END_FUNCTION_BLOCK
