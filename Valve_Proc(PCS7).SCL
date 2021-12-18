@@ -64,7 +64,7 @@ remote{//0-就地  1-远程
     S7_m_c:='true';
     S7_dynamic:='true'
     //S7_archive:='shortterm'
-}:BOOL:=0;
+}:BOOL:=1;
 error{//0-正常  1-故障
     S7_shortcut:='诊断状态';
     S7_m_c:='true';

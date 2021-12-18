@@ -22,7 +22,7 @@ END_CONST
 VAR_INPUT 
     CP {S7_m_c := 'true'} : BOOL;   // 全关位
     OP {S7_m_c := 'true'} : BOOL;   // 全开位
-    remote {S7_m_c := 'true'} : BOOL;   // 远程
+    remote {S7_m_c := 'true'} : BOOL := TRUE;   // 远程
     error {S7_m_c := 'true'} : BOOL;   // 错误
     AI {S7_m_c := 'true'} : WORD := S7_AI_MIN_WORD;   // 阀位采集值
     VP_raw AT AI : INT;
