@@ -1,6 +1,6 @@
 FUNCTION_BLOCK "Valve_Proc"
-TITLE='电动执行机构：阀位反馈、开关2DO输出'
-VERSION:'0.11'
+TITLE='电动执行机构 带阀位反馈'
+VERSION:'1.0'
 KNOW_HOW_PROTECT
 AUTHOR:Goosy
 NAME:ValvePrc
@@ -20,50 +20,53 @@ CONST
 END_CONST
 
 VAR_INPUT 
-    CP {S7_m_c := 'true'} : BOOL;   // 全关位
-    OP {S7_m_c := 'true'} : BOOL;   // 全开位
-    remote {S7_m_c := 'true'} : BOOL := TRUE;   // 远程
-    error {S7_m_c := 'true'} : BOOL;   // 错误
-    AI {S7_m_c := 'true'} : WORD := S7_AI_MIN_WORD;   // 阀位采集值
+    CP {S7_m_c := 'true'} : BOOL;                          // 全关位
+    OP {S7_m_c := 'true'} : BOOL;                          // 全开位
+    remote {S7_m_c := 'true'} : BOOL := TRUE;              // 远程
+    error {S7_m_c := 'true'} : BOOL;                       // 错误
+    AI {S7_m_c := 'true'} : WORD := S7_AI_MIN_WORD;        // 阀位采集值
     VP_raw AT AI : INT;
-    zero_raw {S7_m_c := 'true'} : INT := S7_ZERO;   // 零点原始值（4mA对应数值）0
-    span_raw {S7_m_c := 'true'} : INT := S7_SPAN;   // 极值原始值（20mA对应数值）27648
-    overflow_SP {S7_m_c := 'true'} : INT := 28000;   // 上溢出值
-    underflow_SP {S7_m_c := 'true'} : INT := -500;   // 下溢出值
-    zero {S7_m_c := 'true'} : REAL := 0.0;   // 量程低值
-    span {S7_m_c := 'true'} : REAL := 100.0;   // 量程高值
-    invalid_value {S7_m_c := 'true'} : REAL := -1000000.0;   // 无效输入时指定输出值
-    VP_SP {S7_m_c:='true'} : REAL := 50.0; //设定值
-    AH_limit {S7_m_c := 'true'} : REAL := 100.0;   // 高高报设定值
-    WH_limit {S7_m_c := 'true'} : REAL := 100.0;   // 高报设定值
-    WL_limit {S7_m_c := 'true'} : REAL := 0.0;   // 低报设定值
-    AL_limit {S7_m_c := 'true'} : REAL := 0.0;   // 低低报设定值
-    FT_zone {S7_m_c := 'true'} : REAL := 0.5;   //定位容错区
-    FT_time {S7_m_c := 'true'} : DINT := 0;   // 容错时间 (单位毫秒 赋值0时无容错时间)
+    zero_raw {S7_m_c := 'true'} : INT := S7_ZERO;          // 零点原始值（4mA对应数值）0
+    span_raw {S7_m_c := 'true'} : INT := S7_SPAN;          // 极值原始值（20mA对应数值）27648
+    overflow_SP {S7_m_c := 'true'} : INT := 28000;         // 上溢出值
+    underflow_SP {S7_m_c := 'true'} : INT := -500;         // 下溢出值
+    zero {S7_m_c := 'true'} : REAL := 0.0;                 // 量程低值
+    span {S7_m_c := 'true'} : REAL := 100.0;               // 量程高值
+    invalid_value {S7_m_c := 'true'} : REAL := -1000000.0; // 无效输入时指定输出值
+    VP_SP {S7_m_c:='true'} : REAL := 50.0;                 // 设定值
+    AH_limit {S7_m_c := 'true'} : REAL := 100.0;           // 高高报设定值
+    WH_limit {S7_m_c := 'true'} : REAL := 100.0;           // 高报设定值
+    WL_limit {S7_m_c := 'true'} : REAL := 0.0;             // 低报设定值
+    AL_limit {S7_m_c := 'true'} : REAL := 0.0;             // 低低报设定值
+    FT_zone {S7_m_c := 'true'} : REAL := 0.5;              // 定位容错区
+    FT_time {S7_m_c := 'true'} : DINT := 0;                // 容错时间 (单位毫秒 赋值0时无容错时间)
     ftTime AT FT_time : TIME;
+    stop_delay {S7_m_c := 'true'} : DINT := 500;           // 停止信号延时 (单位毫秒 不要赋值0)
+    stopDelay AT stop_delay : TIME;
 END_VAR
 
 VAR_OUTPUT
-    close_action {S7_m_c := 'true'} : BOOL;   // 正在执行关阀
+    close_action {S7_m_c := 'true'} : BOOL;  // 正在执行关阀
     open_action {S7_m_c := 'true'} : BOOL;   // 正在执行开阀
-    VP_AH {S7_m_c := 'true'} : BOOL;   // 高高报标志
-    VP_WH {S7_m_c := 'true'} : BOOL;   // 高报标志
-    VP_WL {S7_m_c := 'true'} : BOOL;   // 低报标志
-    VP_AL {S7_m_c := 'true'} : BOOL;   // 低低报标志
+    stop_action {S7_m_c := 'true'} : BOOL;   // 停止执行开关阀
+    VP_AH {S7_m_c := 'true'} : BOOL;         // 高高报标志
+    VP_WH {S7_m_c := 'true'} : BOOL;         // 高报标志
+    VP_WL {S7_m_c := 'true'} : BOOL;         // 低报标志
+    VP_AL {S7_m_c := 'true'} : BOOL;         // 低低报标志
     VP_overflow {S7_m_c := 'true'} : BOOL;   // 高溢出
-    VP_underflow {S7_m_c := 'true'} : BOOL;   // 低溢出
-    VP_invalid {S7_m_c:='true'} : BOOL := 0;   //阀位值无效
-    VP_error {S7_m_c:='true'} : BOOL := 0;   //阀位无法测量，比如断线
-    SP_error {S7_m_c := 'true'} : BOOL;   // 设置错误
+    VP_underflow {S7_m_c := 'true'} : BOOL;  // 低溢出
+    VP_invalid {S7_m_c:='true'} : BOOL := 0; // 阀位值无效
+    VP_error {S7_m_c:='true'} : BOOL := 0;   // 阀位无法测量，比如断线
+    SP_error {S7_m_c := 'true'} : BOOL;      // 设置错误
     valve_error {S7_m_c := 'true'} : BOOL;   // 阀体故障，无法操作
-    VP {S7_m_c := 'true'} : REAL;   // 阀位
+    VP {S7_m_c := 'true'} : REAL;            // 阀位
 END_VAR
 
 VAR_IN_OUT
-    close_CMD {S7_m_c := 'true'} : BOOL;   // 关阀命令
-    open_CMD {S7_m_c := 'true'} : BOOL;   // 开阀命令
-    march_CMD {S7_m_c := 'true'} : BOOL;   // 执行指定阀位
-    stop_CMD {S7_m_c := 'true'} : BOOL;   // 停止命令
+    close_CMD {S7_m_c := 'true'} : BOOL;     // 关阀命令
+    open_CMD {S7_m_c := 'true'} : BOOL;      // 开阀命令
+    march_CMD {S7_m_c := 'true'} : BOOL;     // 执行指定阀位命令
+    stop_CMD {S7_m_c := 'true'} : BOOL;      // 停止命令
 END_VAR
 
 VAR
@@ -80,6 +83,7 @@ VAR
     VP_WL_reset : TOF;
     VP_AL_set : TON;
     VP_AL_reset : TOF;
+    stop_TOF : TOF;
 END_VAR
 
 VAR_TEMP
@@ -275,6 +279,12 @@ BEGIN
     //阀动作处理
     //**********************
 
+    // 为停止输出延时信号
+    stop_TOF(
+        IN := stop_CMD,
+        PT := stopDelay);
+    stop_action := stop_TOF.Q;
+
     // 输出复位，停止优先
     valve_error := error OR (CP AND OP); //阀故障
     IF stop_CMD OR NOT remote OR valve_error THEN // stop first
@@ -344,7 +354,7 @@ BEGIN
             close_action := FALSE;
             open_action := FALSE;
             march_CMD := FALSE;
-            mode := STOP_STATUS;
+            stop_CMD := true; // 用stop_CMD启动 stop_action 和 STOP_STATUS
         END_IF;
     END_IF;    
     //**********************
