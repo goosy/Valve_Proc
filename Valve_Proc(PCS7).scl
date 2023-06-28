@@ -9,7 +9,7 @@ TITLE='电动执行机构 带阀位反馈'
     S7_m_c:='true';
     S7_alarm_ui:='1'
 }
-VERSION:'1.0'
+VERSION:'1.1'
 KNOW_HOW_PROTECT
 AUTHOR:Goosy
 NAME:ValvePrc
@@ -70,6 +70,26 @@ error{//0-正常  1-故障
     S7_m_c:='true';
     S7_dynamic:='true'
     //S7_archive:='shortterm'
+}:BOOL:=0;
+enable_AH { // 允许AH报警
+  S7_shortcut := '允许AH报警';
+  S7_m_c := 'true';
+  S7_dynamic := 'true'
+}:BOOL:=0;
+enable_WH { // 允许WH报警
+  S7_shortcut := '允许WH报警';
+  S7_m_c := 'true';
+  S7_dynamic := 'true'
+}:BOOL:=0;
+enable_WL { // 允许WL报警
+  S7_shortcut := '允许WL报警';
+  S7_m_c := 'true';
+  S7_dynamic := 'true'
+}:BOOL:=0;
+enable_AL { // 允许AL报警
+  S7_shortcut := '允许AL报警';
+  S7_m_c := 'true';
+  S7_dynamic := 'true'
 }:BOOL:=0;
 
 //*****以下为模拟输入
@@ -175,6 +195,12 @@ FT_time {//容错时间，单位毫秒 赋值0时无容错时间
     S7_m_c := 'true'
 } :DINT := 0;
 ftTime AT FT_time : TIME;
+stop_delay {// 停止信号延时 (单位毫秒 不要赋值0)
+    S7_link:='false';
+    S7_shortcut := '停止信号延时';
+    S7_m_c := 'true'
+} : DINT := 500;
+stopDelay AT stop_delay : TIME;
 //******模拟输入结束
 
 END_VAR
@@ -345,6 +371,10 @@ END_VAR
 VAR_TEMP
 // Temporary Variables
 deviation:REAL;
+tmp_AH : REAL;
+tmp_WH : REAL;
+tmp_WL : REAL;
+tmp_AL : REAL;
 ERR:BOOL;//测量错误
 OVFL:BOOL;//上溢出
 UDFL:BOOL;//下溢出
@@ -447,8 +477,40 @@ ELSE
             / (span_raw - zero_raw)
             + zero;
     END_IF;
+
+    // 限制值排序
+    IF enable_AH THEN
+        tmp_AH := AH_limit;
+    ELSE
+        tmp_AH := (overflow_SP - zero_raw)
+               * (span - zero)
+               / (span_raw - zero_raw)
+               + zero;
+    END_IF;
+
+    IF enable_WH THEN
+        tmp_WH := WH_limit;
+    ELSE
+        tmp_WH := tmp_AH;
+    END_IF;
+
+    IF enable_AL THEN
+        tmp_AL := AL_limit;
+    ELSE
+        tmp_AL := (underflow_SP - zero_raw)
+               * (span - zero)
+               / (span_raw - zero_raw)
+               + zero;
+    END_IF;
+
+    IF enable_WL THEN
+        tmp_WL := WL_limit;
+    ELSE
+        tmp_WL := tmp_AL;
+    END_IF;
+
     // 参数设置错误或溢出
-    SP_error := (WH_limit > AH_limit) OR (WL_limit > WH_limit) OR (AL_limit > WL_limit);
+    SP_error := tmp_WH > tmp_AH OR tmp_WL > tmp_WH OR tmp_AL > tmp_WL;
     //**********************
 
     //**********************
@@ -460,49 +522,49 @@ ELSE
             trigger_WL := false;
             trigger_AL := false;
     ELSE
-        //上上限报警
-        IF VP > AH_limit THEN
+        // 上上限报警
+        IF enable_AH AND (VP > AH_limit) THEN
             trigger_AH := TRUE;
             trigger_WL := FALSE;
             trigger_WL := FALSE;
             trigger_AL := FALSE;
         END_IF;
-        //上上限报警恢复
-        IF VP < (AH_limit - FT_zone) THEN
+        // 上上限报警恢复
+        IF NOT enable_AH OR VP < (AH_limit - FT_zone) THEN
             trigger_AH := FALSE;
         END_IF;
-        
-        //上限报警
-        IF NOT trigger_AH AND VP > WH_limit THEN
+
+        // 上限报警
+        IF NOT trigger_AH AND enable_WH AND (VP > WH_limit) THEN
             trigger_WH := TRUE;
             trigger_WL := FALSE;
             trigger_AL := FALSE;
         END_IF;
-        //上限报警恢复
-        IF VP < (WH_limit - FT_zone) THEN
+        // 上限报警恢复
+        IF NOT enable_WH OR VP < (WH_limit - FT_zone) THEN
             trigger_WH := FALSE;
         END_IF;
-        
-        //下下限报警
-        IF VP < AL_limit THEN
+
+        // 下下限报警
+        IF enable_AL AND (VP < AL_limit) THEN
             trigger_AL := TRUE;
             trigger_WL := FALSE;
             trigger_WH := FALSE;
             trigger_AH := FALSE;
         END_IF;
-        //下下限报警恢复
-        IF VP > (AL_limit + FT_zone) THEN
+        // 下下限报警恢复
+        IF NOT enable_AL OR VP > (AL_limit + FT_zone) THEN
             trigger_AL := FALSE;
         END_IF;
-        
-        //下限报警
-        IF NOT trigger_AL AND (VP < WL_limit) THEN
+
+        // 下限报警
+        IF NOT trigger_AL AND enable_WL AND (VP < WL_limit) THEN
             trigger_WL := TRUE;
             trigger_WH := FALSE;
             trigger_AH := FALSE;
         END_IF;
-        //下限报警恢复
-        IF VP > (WL_limit + FT_zone) THEN
+        // 下限报警恢复
+        IF NOT enable_WL OR VP > (WL_limit + FT_zone) THEN
             trigger_WL := FALSE;
         END_IF;
     END_IF;
