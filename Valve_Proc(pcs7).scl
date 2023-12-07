@@ -9,7 +9,7 @@ TITLE='电动执行机构 带阀位反馈'
     S7_m_c:='true';
     S7_alarm_ui:='1'
 }
-VERSION:'1.1'
+VERSION:'1.2'
 KNOW_HOW_PROTECT
 AUTHOR:Goosy
 NAME:ValvePrc
@@ -24,9 +24,11 @@ CONST
     S7_AI_MAX := 32767;
     S7_AI_MAX_WORD := W#16#7FFF;
     STOP_STATUS := W#16#0;
-    CLOSE_STATUS := W#16#1;
-    OPEN_STATUS := W#16#2;
-    MARCH_STATUS :=  W#16#4;
+    CLOSING_STATUS := W#16#1;
+    OPENNING_STATUS := W#16#2;
+    CLOSE_STATUS := W#16#4;
+    OPEN_STATUS := W#16#8;
+    MARCH_STATUS :=  W#16#16;
 END_CONST
 
 VAR_INPUT
@@ -242,6 +244,11 @@ stop_action {// 1-停止执行开关阀，只有阀动作自保持时需要
     S7_m_c := 'true';
     S7_dynamic:='true'
 }:BOOL:=0;
+control_action {// 2位单线控制输出
+    S7_shortcut:='2位单线控制';
+    S7_m_c := 'true';
+    S7_dynamic:='true'
+}:BOOL:=0;  //1：开阀 0：关阀
 
 //******状态输出
 VP_AH{//上上限报警
@@ -356,7 +363,7 @@ trigger_AH : BOOL;   // 触发高高报
 trigger_WH : BOOL;   // 触发高报
 trigger_WL : BOOL;   // 触发低报
 trigger_AL : BOOL;   // 触发低低报
-mode : WORD; //当前模式 0x0:stop 0x1:close 0x2:open 0x4:march
+mode : WORD; //当前模式
 VP_AH_set : TON;
 VP_AH_reset : TOF;
 VP_WH_set : TON;
@@ -656,62 +663,81 @@ ELSE
     // 输出复位，停止优先
     valve_error := error OR (CP AND OP); //阀故障
     IF stop_CMD OR NOT remote OR valve_error THEN // stop first
-        open_action := FALSE;
-        close_action := FALSE;
-        open_CMD := FALSE;
         close_CMD := FALSE;
+        open_CMD := FALSE;
         march_CMD := FALSE;
         stop_CMD := FALSE;
-        mode := STOP_STATUS;
+        IF mode = OPENNING_STATUS OR mode = CLOSING_STATUS or mode = MARCH_STATUS THEN
+            mode := STOP_STATUS;
+        END_IF;
+    END_IF;
+    IF mode = STOP_STATUS THEN
+        open_action := FALSE;
+        close_action := FALSE;
     END_IF;
 
-    // 当全开状态，复位打开动作
-    IF OP THEN
+    // 全开状态的判定和动作
+    IF OP AND mode <> CLOSING_STATUS AND mode <> MARCH_STATUS THEN
+        mode := STOP_STATUS;
+    END_IF;
+    IF mode = OPEN_STATUS THEN
         open_CMD := FALSE;
+        close_action := FALSE;
         open_action := FALSE;
-        IF mode = OPEN_STATUS THEN
-            mode := STOP_STATUS;
-        END_IF;
+        control_action := TRUE;
     END_IF;
-    // 当全关状态，复位关闭动作
-    IF CP THEN
-        close_CMD := FALSE;
-        close_action := FALSE;
-        IF mode = CLOSE_STATUS THEN
-            mode := STOP_STATUS;
-        END_IF;
-    END_IF;
-    // 开阀
-    IF open_CMD AND mode <> OPEN_STATUS THEN
-        open_action := TRUE;
-        close_action := FALSE;
-        close_CMD := FALSE;
-        march_CMD := FALSE;
-        mode := OPEN_STATUS;
-    ELSIF mode = OPEN_STATUS THEN
-        close_action := FALSE;
-        open_action := TRUE;
-    END_IF;
-    // 关阀
-    IF close_CMD AND mode <> CLOSE_STATUS THEN
-        close_action := TRUE;
-        open_action := FALSE;
-        open_CMD := FALSE;
-        march_CMD := FALSE;
+
+    // 全关状态的判定和动作
+    IF CP AND mode <> OPENNING_STATUS AND mode <> MARCH_STATUS THEN
         mode := CLOSE_STATUS;
-    ELSIF mode = CLOSE_STATUS THEN
+    END_IF;
+    IF mode = CLOSE_STATUS THEN
+        close_CMD := FALSE;
+        open_action := FALSE;
+        close_action := FALSE;
+        control_action := FALSE;
+    END_IF;
+
+    // 开阀
+    IF open_CMD AND mode <> OPENNING_STATUS THEN
+        close_CMD := FALSE;
+        open_CMD := FALSE;
+        march_CMD := FALSE;
+        mode := OPENNING_STATUS;
+    END_IF;
+    IF mode = OPENNING_STATUS THEN
+        close_action := FALSE;
+        open_action := TRUE;
+        control_action := TRUE;
+    END_IF;
+
+    // 关阀
+    IF close_CMD AND mode <> CLOSING_STATUS THEN
+        close_CMD := FALSE;
+        open_CMD := FALSE;
+        march_CMD := FALSE;
+        mode := CLOSING_STATUS;
+    END_IF;
+    IF mode = CLOSING_STATUS THEN
         close_action := TRUE;
         open_action := FALSE;
+        control_action := FALSE;
     END_IF;
 
     // 指定阀位控制
     IF VP_invalid THEN // 阀位无效时关闭指定阀位命令
         march_CMD := FALSE;
-    ELSIF march_CMD AND mode <> MARCH_STATUS THEN
-        open_CMD := FALSE;
+        IF mode = MARCH_STATUS THEN
+            mode := STOP_STATUS;
+        END_IF;
+    END_IF;
+    IF march_CMD AND mode <> MARCH_STATUS THEN
         close_CMD := FALSE;
+        open_CMD := FALSE;
+        march_CMD := FALSE;
         mode := MARCH_STATUS;
-    ELSIF mode = MARCH_STATUS THEN
+    END_IF;
+    IF mode = MARCH_STATUS THEN
         IF VP > VP_SP + FT_zone THEN //当设定值容错区低于阀位，关阀动作
             close_action := TRUE;
             open_action := FALSE;
@@ -722,7 +748,8 @@ ELSE
             close_action := FALSE;
             open_action := FALSE;
             march_CMD := FALSE;
-            stop_CMD := TRUE; // 用stop_CMD启动 stop_action 和 STOP_STATUS
+            // 用stop_CMD启动 stop_action 和 STOP_STATUS
+            stop_CMD := TRUE;
         END_IF;
     END_IF;
     //**********************
