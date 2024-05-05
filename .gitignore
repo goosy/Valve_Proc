@@ -1,3 +1,4 @@
 *.zip
 *.zap15
-*.pdl
+*.zap16
+/test/test/
