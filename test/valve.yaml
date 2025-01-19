@@ -1,0 +1,41 @@
+---
+name: test-Valve
+
+symbols:
+- [ROV1101_OP, M30.0]
+- [ROV1101_CP, M30.1]
+- [ROV1101_RL, M30.2]
+- [ROV1101_ER, M30.3]
+- [ROV1101_HSO, M30.4]
+- [ROV1101_HSC, M30.5]
+- [ROV1101_HSS, M30.6]
+- [ROV1101_HSR, M30.7]
+- [ROV1101_ENOpen, M31.0, BOOL, 内部允许开]
+- [ROV1101_ENClose, M31.1, BOOL, 内部允许关]
+- [ROV1101_ENStop, M31.2, BOOL, 内部允许停止]
+- [ROV1101_ENVP, M31.3, BOOL, 内部允许阀位]
+- [ROV1101_open, M31.4, BOOL, 内部自保持开]
+- [ROV1101_close, M31.5, BOOL, 内部自保持关]
+- [ROV1101_mode, MW32, WORD, 模式]
+- [ROV1101_AI, MW34, WORD, 阀位采集值]
+- [ROV1101_position, MW36, INT, 阀位内部值]
+- [ROV1101_DR, MD38, DINT, 阀位执行时长]
+- [Valve_EMLT, FB100, Valve_EMLT, 阀模拟]
+- [ROV1101, DB701]
+- [ROV1101_EMLT, DB702, Valve_EMLT, 阀模拟]
+
+list :
+
+- comment: 阀测试
+  DB: ROV1101
+  AI: ROV1101_EMLT.AI
+  OP: ROV1101_EMLT.OP
+  CP: ROV1101_EMLT.CP
+  remote: ROV1101_EMLT.RL
+  error: ROV1101_EMLT.ER
+  open_action: ROV1101_EMLT.HSO
+  close_action: ROV1101_EMLT.HSC
+  stop_action: ROV1101_EMLT.HSS
+  control_action: ROV1101_EMLT.HSR
+  $stop_delay: TIME#1S
+...

@@ -1,15 +1,15 @@
-//**************************************************************************************
+﻿//**************************************************************************************
 // Copyright Goosy. All Rights Reserved. Confidential
 // If interlocking is involved, it is recommended not to use it in CFC
 //**************************************************************************************
 FUNCTION_BLOCK "Valve_Proc"
-TITLE='电动执行机构 带阀位反馈'
+TITLE='电动执行机构，可选阀位反馈'
 {
     S7_tasklist:='OB100';//Block is called if there is in a warm restart
     S7_m_c:='true';
     S7_alarm_ui:='1'
 }
-VERSION:'1.2'
+VERSION:'1.3'
 KNOW_HOW_PROTECT
 AUTHOR:Goosy
 NAME:ValvePrc
@@ -24,11 +24,15 @@ CONST
     S7_AI_MAX := 32767;
     S7_AI_MAX_WORD := W#16#7FFF;
     STOP_STATUS := W#16#0;
-    CLOSING_STATUS := W#16#1;
-    OPENNING_STATUS := W#16#2;
-    CLOSE_STATUS := W#16#4;
-    OPEN_STATUS := W#16#8;
-    MARCH_STATUS :=  W#16#16;
+    CLOSE_STATUS := W#16#1;
+    OPEN_STATUS := W#16#2;
+    STOPPING_STATUS := W#16#4;
+    CLOSING_STATUS := W#16#8;
+    OPENNING_STATUS := W#16#10;
+    POSITION_STATUS := W#16#20;
+    ZERO := 0.0;
+    SPAN := 100.0;
+    INVALID_VALUE := -100.0;
 END_CONST
 
 VAR_INPUT
@@ -73,26 +77,6 @@ error{//0-正常  1-故障
     S7_dynamic:='true'
     //S7_archive:='shortterm'
 }:BOOL:=0;
-enable_AH { // 允许AH报警
-  S7_shortcut := '允许AH报警';
-  S7_m_c := 'true';
-  S7_dynamic := 'true'
-}:BOOL:=0;
-enable_WH { // 允许WH报警
-  S7_shortcut := '允许WH报警';
-  S7_m_c := 'true';
-  S7_dynamic := 'true'
-}:BOOL:=0;
-enable_WL { // 允许WL报警
-  S7_shortcut := '允许WL报警';
-  S7_m_c := 'true';
-  S7_dynamic := 'true'
-}:BOOL:=0;
-enable_AL { // 允许AL报警
-  S7_shortcut := '允许AL报警';
-  S7_m_c := 'true';
-  S7_dynamic := 'true'
-}:BOOL:=0;
 
 //*****以下为模拟输入
 AI{//阀位采集值
@@ -133,76 +117,29 @@ underflow_SP{//下溢出设定值
     S7_dynamic:='true'
     //S7_archive:='shortterm'
 }:INT:=-500;
-zero{//零点
-    S7_shortcut:='零点';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=0.0;
-span{//量程
-    S7_shortcut:='量程';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=100.0;
-invalid_value{//无效设定值
-    S7_visible:='false';
-    S7_link:='false';
-    S7_shortcut:='无效设定值';
-    S7_m_c:='true'
-    //S7_archive:='shortterm'
-}:REAL:=-1000000.0;
 VP_SP{//设定值
     S7_shortcut:='设定值';
     S7_m_c:='true';
     S7_dynamic:='true'
     //S7_archive:='shortterm'
 }:REAL:=50.0;
-AH_limit{//上上限
-    S7_link:='false';
-    S7_shortcut:='上上限';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=100.0;
-WH_limit{//上限
-    S7_link:='false';
-    S7_shortcut:='上限';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=100.0;
-WL_limit{//下限
-    S7_link:='false';
-    S7_shortcut:='下限';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=0.0;
-AL_limit{//下下限
-    S7_link:='false';
-    S7_shortcut:='下下限';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-    //S7_archive:='shortterm'
-}:REAL:=0.0;
 FT_zone {//执行指定阀位容错值
     S7_link:='false';
     S7_shortcut := '定位容错值';
     S7_m_c := 'true'
 }:REAL:=0.5;
-FT_time {//容错时间，单位毫秒 赋值0时无容错时间
+action_time {// 动作时间，完成阀动作的最长时间，无阀位时在该时间后判断是否离线 (单位毫秒)
     S7_link:='false';
     S7_shortcut := '容错时间';
     S7_m_c := 'true'
-} :DINT := 0;
-ftTime AT FT_time : TIME;
-stop_delay {// 停止信号延时 (单位毫秒 不要赋值0)
+} :DINT := 100000;
+action_DR AT action_time : TIME;
+signal_time {// 信号时间，停止等信号要保持持续的最短时间，有阀位时在该时间后判断阀是否离线 (单位毫秒 阀位有效时)
     S7_link:='false';
     S7_shortcut := '停止信号延时';
     S7_m_c := 'true'
 } : DINT := 500;
-stopDelay AT stop_delay : TIME;
+signal_DR AT signal_time : TIME;
 //******模拟输入结束
 
 END_VAR
@@ -251,57 +188,32 @@ control_action {// 2位单线控制输出
 }:BOOL:=0;  //1：开阀 0：关阀
 
 //******状态输出
-VP_AH{//上上限报警
-    S7_shortcut:='上上限报警';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:bool:=0;
-VP_WH{//上限警告
-    S7_shortcut:='上限警告';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:bool:=0;
-VP_WL{//下限警告
-    S7_shortcut:='下限警告';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:BOOL:=0;
-VP_AL{//下下限报警
-    S7_shortcut:='下下限报警';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:BOOL:=0;
-VP_overflow{//上溢出标志
-    S7_shortcut:='上溢出标志';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:bool:=0;
-VP_underflow{//下溢出标志
-    S7_shortcut:='下溢出标志';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:bool:=0;
-VP_invalid{//阀位值无效
-    S7_shortcut:='阀位值无效';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:BOOL:=0;
-VP_error{//设置测量错误标志
-    S7_shortcut:='测量错误';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:BOOL:=0;
-SP_error{//设置错误标志
-    S7_shortcut:='错误标志';
-    S7_m_c:='true';
-    S7_dynamic:='true'
-}:BOOL:=0;
-valve_error {//阀体故障，无法操作
+valve_error {  //阀体故障，无法操作
     S7_shortcut:='阀体故障';
     S7_m_c := 'true';
     S7_dynamic:='true'
 }:BOOL:=0;
-VP{//阀位
+VP_error{  // 阀位值无效，断路、短路、溢出
+    S7_shortcut:='测量错误';
+    S7_m_c:='true';
+    S7_dynamic:='true'
+}:BOOL:=0;
+action_success{  // 阀动作成功，当 action_success action_error 都不为 true 时，表示不能判断
+    S7_shortcut:='执行成功';
+    S7_m_c:='true';
+    S7_dynamic:='true'
+}:BOOL:=0;
+action_error{  // 执行错误，即开、关、停在指定时间后无反馈
+    S7_shortcut:='执行失败';
+    S7_m_c:='true';
+    S7_dynamic:='true'
+}:BOOL:=0;
+action{  // 阀动作执行中
+    S7_shortcut:='执行中';
+    S7_m_c:='true';
+    S7_dynamic:='true'
+}: BOOL;
+VP{  //阀位
     S7_shortcut:='阀位';
     S7_m_c:='true';
     S7_dynamic:='true'
@@ -311,24 +223,24 @@ VP{//阀位
 END_VAR
 
 VAR_IN_OUT
-close_CMD{//  1-发出手动全关命令
+close_CMD{// 发出全关命令
     S7_shortcut:='手动全关命令';
     S7_m_c:='true';
     S7_dynamic:='true'
     //S7_archive:='shortterm'
 }:BOOL:=0;
-open_CMD{//  1-发出手动全开命令
+open_CMD{//  发出全开命令
     S7_shortcut:='手动全开命令';
     S7_m_c:='true';
     S7_dynamic:='true'
     //S7_archive:='shortterm'
 }:BOOL:=0;
-march_CMD{// 1-动作至指定阀位
+position_CMD{// 发出定位命令
     S7_shortcut:='位式/模拟指示';
     S7_m_c:='true';
     S7_dynamic:='true'
 }:BOOL:=0;
-stop_CMD{//1-发出手动停止命令
+stop_CMD{// 发出停止命令
     S7_shortcut:='手动停止命令';
     S7_m_c:='true';
     S7_dynamic:='true'
@@ -347,7 +259,7 @@ AUX_PR10 {S7_visible := 'false'} : ANY;  // Auxiliary value 10
 END_VAR
 
 VAR
-SbRESTART:BOOL:=TRUE;
+sbRESTART:BOOL:=TRUE;
 siRUNUPCNT:INT:=0;
 sb_SIG_1:BOOL:=FALSE;
 sb_SIG_2:BOOL:=FALSE;
@@ -359,32 +271,18 @@ sb_SIG_7:BOOL:=FALSE;
 sb_SIG_8:BOOL:=FALSE;
 ALARM_8P_1:ALARM_8P;
 // 内部
-trigger_AH : BOOL;   // 触发高高报
-trigger_WH : BOOL;   // 触发高报
-trigger_WL : BOOL;   // 触发低报
-trigger_AL : BOOL;   // 触发低低报
-mode : WORD; //当前模式
-VP_AH_set : TON;
-VP_AH_reset : TOF;
-VP_WH_set : TON;
-VP_WH_reset : TOF;
-VP_WL_set : TON;
-VP_WL_reset : TOF;
-VP_AL_set : TON;
-VP_AL_reset : TOF;
-stop_TOF : TOF;
+executable      : BOOL; // 可执行
+action_trigger  : BOOL; // 阀动作触发
+signal          : BOOL; // 阀信号中
+mode            : WORD; // 当前模式
+last_mode       : WORD; // 上一循环时的模式
+last_VP         : REAL; // 上一次阀位
+signal_TOF : TOF;
+action_TOF : TOF;
 END_VAR
 
 VAR_TEMP
-// Temporary Variables
-deviation:REAL;
-tmp_AH : REAL;
-tmp_WH : REAL;
-tmp_WL : REAL;
-tmp_AL : REAL;
-ERR:BOOL;//测量错误
-OVFL:BOOL;//上溢出
-UDFL:BOOL;//下溢出
+ERR : BOOL;                 // 测量错误
 // COMMON
 pbALARM:BOOL;
 pbM_SUP:BOOL;
@@ -412,8 +310,7 @@ END_STRUCT;
 DUMMY:INT;
 END_VAR
 
-
-// Statement Section
+BEGIN
 DUMMY:=RD_SINFO(TOP_SI:=TOP_SI,START_UP_SI:=START_UP_SI);
 pbM_SUP:=MSG_LOCK;
 IF sbRESTART THEN
@@ -422,8 +319,7 @@ IF sbRESTART THEN
 END_IF;
 CASE WORD_TO_INT(BYTE_TO_WORD(TOP_SI.NUM))OF
     100:
-    VP:=0.0;deviation:=0.0;SP_error:=0;VP_overflow:=0;VP_underflow:=0;
-    VP_AH:=0;VP_WH:=0;VP_WL:=0;VP_AL:=0;
+    VP:=0.0;action_error:=0;
     open_action:=0;close_action:=0;
     QMSG_ERR:=0;
     QMSG_SUP:=0;
@@ -440,319 +336,262 @@ CASE WORD_TO_INT(BYTE_TO_WORD(TOP_SI.NUM))OF
     siRUNUPCNT:=RUNUPCYC;
 ELSE
 
-    //**********************
-    // 阀位反馈
-    //**********************
+//**********************
+// 阀位反馈
+//**********************
 
-    // 判断输入值的有效性
-    IF VP_raw = S7_AI_MIN OR VP_raw = S7_AI_MAX THEN
-        // 非测量输入
-        ERR := TRUE; // 输出
-        OVFL := FALSE;
-        UDFL := FALSE;
-    ELSIF VP_raw > overflow_SP THEN
-        // 高溢出
-        ERR := FALSE;
-        OVFL := TRUE; // 输出
-        UDFL := FALSE;
-    ELSIF VP_raw < underflow_SP THEN
-        // 低溢出
-        ERR := FALSE;
-        UDFL := TRUE; // 输出
-        OVFL:= FALSE;
-    ELSE
-        // 正常输入
-        ERR := FALSE;
-        OVFL := FALSE;
-        UDFL := FALSE;
-    END_IF;
+// 判断输入值的有效性
+IF VP_raw = S7_AI_MIN OR VP_raw = S7_AI_MAX THEN
+    // 非测量输入
+    ERR := TRUE;
+ELSIF VP_raw > overflow_SP OR VP_raw < underflow_SP THEN
+    // 溢出
+    ERR := TRUE;
+ELSE
+    // 正常输入
+    ERR := FALSE;
+END_IF;
 
-    // 设定阀位值及其有效性
-    VP_error := ERR;
-    VP_overflow := OVFL;
-    VP_underflow := UDFL;
-    VP_invalid := ERR OR OVFL OR UDFL;
-    IF VP_invalid THEN
-        VP_AH := FALSE;
-        VP_WH := FALSE;
-        VP_WL := FALSE;
-        VP_AL := FALSE;
-        VP := invalid_value; // 无效时不计算，直接设为默认无效值
-    ELSE
-        VP := (VP_raw - zero_raw)
-            * (span - zero)
-            / (span_raw - zero_raw)
-            + zero;
-    END_IF;
+// 设定阀位值及其有效性
+VP_error := ERR;
+IF ERR THEN
+    VP := INVALID_VALUE; // 无效时不计算
+ELSE
+    VP := (VP_raw - zero_raw)
+        * (SPAN - ZERO)
+        / (span_raw - zero_raw)
+        + ZERO;
+END_IF;
 
-    // 限制值排序
-    IF enable_AH THEN
-        tmp_AH := AH_limit;
-    ELSE
-        tmp_AH := (overflow_SP - zero_raw)
-               * (span - zero)
-               / (span_raw - zero_raw)
-               + zero;
-    END_IF;
+//**********************
+// 阀动作处理
+//**********************
 
-    IF enable_WH THEN
-        tmp_WH := WH_limit;
-    ELSE
-        tmp_WH := tmp_AH;
-    END_IF;
-
-    IF enable_AL THEN
-        tmp_AL := AL_limit;
-    ELSE
-        tmp_AL := (underflow_SP - zero_raw)
-               * (span - zero)
-               / (span_raw - zero_raw)
-               + zero;
-    END_IF;
-
-    IF enable_WL THEN
-        tmp_WL := WL_limit;
-    ELSE
-        tmp_WL := tmp_AL;
-    END_IF;
-
-    // 参数设置错误或溢出
-    SP_error := tmp_WH > tmp_AH OR tmp_WL > tmp_WH OR tmp_AL > tmp_WL;
-    //**********************
-
-    //**********************
-    // 报警处理
-    //**********************
-    IF SP_error OR VP_invalid THEN
-            trigger_AH := false;
-            trigger_WH := false;
-            trigger_WL := false;
-            trigger_AL := false;
-    ELSE
-        // 上上限报警
-        IF enable_AH AND (VP > AH_limit) THEN
-            trigger_AH := TRUE;
-            trigger_WL := FALSE;
-            trigger_WL := FALSE;
-            trigger_AL := FALSE;
-        END_IF;
-        // 上上限报警恢复
-        IF NOT enable_AH OR VP < (AH_limit - FT_zone) THEN
-            trigger_AH := FALSE;
-        END_IF;
-
-        // 上限报警
-        IF NOT trigger_AH AND enable_WH AND (VP > WH_limit) THEN
-            trigger_WH := TRUE;
-            trigger_WL := FALSE;
-            trigger_AL := FALSE;
-        END_IF;
-        // 上限报警恢复
-        IF NOT enable_WH OR VP < (WH_limit - FT_zone) THEN
-            trigger_WH := FALSE;
-        END_IF;
-
-        // 下下限报警
-        IF enable_AL AND (VP < AL_limit) THEN
-            trigger_AL := TRUE;
-            trigger_WL := FALSE;
-            trigger_WH := FALSE;
-            trigger_AH := FALSE;
-        END_IF;
-        // 下下限报警恢复
-        IF NOT enable_AL OR VP > (AL_limit + FT_zone) THEN
-            trigger_AL := FALSE;
-        END_IF;
-
-        // 下限报警
-        IF NOT trigger_AL AND enable_WL AND (VP < WL_limit) THEN
-            trigger_WL := TRUE;
-            trigger_WH := FALSE;
-            trigger_AH := FALSE;
-        END_IF;
-        // 下限报警恢复
-        IF NOT enable_WL OR VP > (WL_limit + FT_zone) THEN
-            trigger_WL := FALSE;
-        END_IF;
-    END_IF;
-
-    // 容错时限后输出报警标志
-    IF ftTime = T#0ms THEN
-        VP_AH := trigger_AH;
-        VP_WH := trigger_WH;
-        VP_WL := trigger_WL;
-        VP_AL := trigger_AL;
-    ELSE
-        // 延时置位高高报
-        VP_AH_set(
-            IN := trigger_AH,
-            PT := ftTime);
-        IF VP_AH_set.Q THEN
-            VP_AH := TRUE;
-        END_IF;
-
-        // 延时复位高高报
-        VP_AH_reset(
-            IN := trigger_AH,
-            PT := ftTime);
-        IF NOT VP_AH_reset.Q THEN
-            VP_AH := FALSE;
-        END_IF;
-
-        // 延时置位高报
-        VP_WH_set(
-            IN := trigger_WH,
-            PT := ftTime);
-        IF VP_WH_set.Q THEN
-            VP_WH := TRUE;
-        END_IF;
-
-        // 延时复位高报
-        VP_WH_reset(
-            IN := trigger_WH,
-            PT := ftTime);
-        IF NOT VP_WH_reset.Q THEN
-            VP_WH := FALSE;
-        END_IF;
-
-        // 延时置位低报
-        VP_WL_set(
-            IN := trigger_WL,
-            PT := ftTime);
-        IF VP_WL_set.Q THEN
-            VP_WL := TRUE;
-        END_IF;
-
-        // 延时复位低报
-        VP_WL_reset(
-            IN := trigger_WL,
-            PT := ftTime);
-        IF NOT VP_WL_reset.Q THEN
-            VP_WL := FALSE;
-        END_IF;
-
-        // 延时置位低低报
-        VP_AL_set(
-            IN := trigger_AL,
-            PT := ftTime);
-        IF VP_AL_set.Q THEN
-            VP_AL := TRUE;
-        END_IF;
-
-        // 延时复位低低报
-        VP_AL_reset(
-            IN := trigger_AL,
-            PT := ftTime);
-        IF NOT VP_AL_reset.Q THEN
-            VP_AL := FALSE;
-        END_IF;
-
-    END_IF;
-    //**********************
-
-    //**********************
-    // 阀动作处理
-    //**********************
-
-    // 为停止输出延时信号
-    stop_TOF(
-        IN := stop_CMD,
-        PT := stopDelay);
-    stop_action := stop_TOF.Q;
-
-    // 输出复位，停止优先
-    valve_error := error OR (CP AND OP); //阀故障
-    IF stop_CMD OR NOT remote OR valve_error THEN // stop first
-        close_CMD := FALSE;
-        open_CMD := FALSE;
-        march_CMD := FALSE;
-        stop_CMD := FALSE;
-        IF mode = OPENNING_STATUS OR mode = CLOSING_STATUS or mode = MARCH_STATUS THEN
-            mode := STOP_STATUS;
-        END_IF;
-    END_IF;
-    IF mode = STOP_STATUS THEN
-        open_action := FALSE;
-        close_action := FALSE;
-    END_IF;
-
-    // 全开状态的判定和动作
-    IF OP AND mode <> CLOSING_STATUS AND mode <> MARCH_STATUS THEN
+// 准备动作变量
+valve_error := error OR (CP AND OP); //阀故障
+executable := remote AND NOT valve_error; // 可执行
+action := mode = STOPPING_STATUS OR mode = OPENNING_STATUS OR mode = CLOSING_STATUS OR mode = POSITION_STATUS;
+IF NOT executable THEN
+    // 切换至停止状态
+    // 开到位和关到位情况会在后继代码中做修正，无须在此切换
+    IF action THEN
         mode := STOP_STATUS;
     END_IF;
-    IF mode = OPEN_STATUS THEN
-        open_CMD := FALSE;
-        close_action := FALSE;
-        open_action := FALSE;
-        control_action := TRUE;
+    // 输出线圈会在后继代码中复位
+    signal := FALSE;
+    action := FALSE;
+    action_success := FALSE;
+    action_error := FALSE;
+    close_CMD := FALSE;
+    open_CMD := FALSE;
+    position_CMD := FALSE;
+    stop_CMD := FALSE;
+    // 重置动作计时
+    signal_TOF.STATE := B#16#0;
+    action_TOF.STATE := B#16#0;
+END_IF;
+// action 上升沿
+action_trigger := last_mode <> mode AND action; // action 已隐含 executable
+last_mode := mode;
+IF action_trigger THEN // 重置离线错误，记录动作前的阀位
+    action_success := FALSE;
+    action_error := FALSE;
+    IF NOT VP_error THEN
+        last_VP := VP;
     END_IF;
+END_IF;
 
-    // 全关状态的判定和动作
-    IF CP AND mode <> OPENNING_STATUS AND mode <> MARCH_STATUS THEN
-        mode := CLOSE_STATUS;
-    END_IF;
-    IF mode = CLOSE_STATUS THEN
-        close_CMD := FALSE;
-        open_action := FALSE;
-        close_action := FALSE;
-        control_action := FALSE;
-    END_IF;
+// 动作计时
+signal_TOF(
+    IN := action_trigger,
+    PT := signal_DR);
+action_TOF(
+    IN := action_trigger,
+    PT := action_DR);
 
-    // 开阀
-    IF open_CMD AND mode <> OPENNING_STATUS THEN
-        close_CMD := FALSE;
-        open_CMD := FALSE;
-        march_CMD := FALSE;
-        mode := OPENNING_STATUS;
+// 停止命令优先
+IF stop_CMD THEN
+    IF mode = STOPPING_STATUS THEN
+        mode := STOP_STATUS; // 确保停止状态可以继续响应 stop_CMD
+    ELSE
+        mode := STOPPING_STATUS;
+        stop_CMD := FALSE;
     END_IF;
+    close_CMD := FALSE;
+    open_CMD := FALSE;
+    position_CMD := FALSE;
+END_IF;
+
+// 停阀动作
+IF mode = STOPPING_STATUS THEN
+    open_action := FALSE;
+    close_action := FALSE;
+    stop_action := TRUE;
+END_IF;
+// 复位动作
+IF mode = STOP_STATUS THEN
+    open_action := FALSE;
+    close_action := FALSE;
+    stop_action := FALSE;
+END_IF;
+
+// 全开状态的判定和动作
+IF OP AND mode <> CLOSING_STATUS AND mode <> POSITION_STATUS THEN
     IF mode = OPENNING_STATUS THEN
-        close_action := FALSE;
-        open_action := TRUE;
-        control_action := TRUE;
+        action_success := TRUE;
     END_IF;
+    mode := OPEN_STATUS;
+END_IF;
+// 复位动作
+IF mode = OPEN_STATUS THEN
+    open_CMD := FALSE;
+    close_action := FALSE;
+    open_action := FALSE;
+    control_action := TRUE;
+    stop_action := FALSE;
+END_IF;
 
-    // 关阀
-    IF close_CMD AND mode <> CLOSING_STATUS THEN
-        close_CMD := FALSE;
-        open_CMD := FALSE;
-        march_CMD := FALSE;
-        mode := CLOSING_STATUS;
-    END_IF;
+// 全关状态的判定
+IF CP AND mode <> OPENNING_STATUS AND mode <> POSITION_STATUS THEN
     IF mode = CLOSING_STATUS THEN
+        action_success := TRUE;
+    END_IF;
+    mode := CLOSE_STATUS;
+END_IF;
+// 复位动作
+IF mode = CLOSE_STATUS THEN
+    close_CMD := FALSE;
+    open_action := FALSE;
+    close_action := FALSE;
+    control_action := FALSE;
+    stop_action := FALSE;
+END_IF;
+
+// 开阀
+IF open_CMD THEN
+    IF mode = OPENNING_STATUS THEN
+        mode := STOP_STATUS; // 确保 OPENNING_STATUS 可以继续响应 open_CMD
+    ELSE
+        mode := OPENNING_STATUS;
+        open_CMD := FALSE;
+    END_IF;
+    close_CMD := FALSE;
+    position_CMD := FALSE;
+END_IF;
+// 动作
+IF mode = OPENNING_STATUS THEN
+    close_action := FALSE;
+    open_action := TRUE;
+    control_action := TRUE;
+    stop_action := FALSE;
+END_IF;
+
+// 关阀
+IF close_CMD THEN
+    IF mode = CLOSING_STATUS THEN
+        mode := STOP_STATUS; // 确保 CLOSING_STATUS 可以继续响应 close_CMD
+    ELSE
+        mode := CLOSING_STATUS;
+        close_CMD := FALSE;
+    END_IF;
+    open_CMD := FALSE;
+    position_CMD := FALSE;
+END_IF;
+// 动作
+IF mode = CLOSING_STATUS THEN
+    close_action := TRUE;
+    open_action := FALSE;
+    control_action := FALSE;
+    stop_action := FALSE;
+END_IF;
+
+// 指定阀位控制
+IF VP_error THEN // 阀位无效时关闭指定阀位命令
+    position_CMD := FALSE;
+    IF mode = POSITION_STATUS THEN
+        action_error := TRUE;
+        mode := STOPPING_STATUS;
+    END_IF;
+END_IF;
+IF position_CMD THEN
+    IF mode = POSITION_STATUS THEN
+        mode := STOP_STATUS; // 确保 POSITION_STATUS 可以继续响应 position_CMD
+    ELSE
+        mode := POSITION_STATUS;
+        position_CMD := FALSE;
+    END_IF;
+END_IF;
+// 动作
+IF mode = POSITION_STATUS THEN
+    IF VP > VP_SP + FT_zone THEN //当设定值容错区低于阀位，关阀动作
         close_action := TRUE;
         open_action := FALSE;
-        control_action := FALSE;
+        stop_action := FALSE;
+    ELSIF VP < VP_SP - FT_zone THEN //当设定值容错区高于阀位，开阀动作
+        close_action := FALSE;
+        open_action := TRUE;
+        stop_action := FALSE;
+    ELSE //当设定值在阀位容错区内，停止动阀，复位定位命令
+        close_action := FALSE;
+        open_action := FALSE;
+        position_CMD := FALSE;
+        action_success := TRUE;
+        mode := STOPPING_STATUS;
     END_IF;
+END_IF;
 
-    // 指定阀位控制
-    IF VP_invalid THEN // 阀位无效时关闭指定阀位命令
-        march_CMD := FALSE;
-        IF mode = MARCH_STATUS THEN
-            mode := STOP_STATUS;
+// 根据有无阀位，取不同的动作无响应时间
+
+// 信号结束时判断执行结果
+// signal 已隐含 executable
+IF NOT signal_TOF.Q AND signal THEN
+    IF mode = STOPPING_STATUS AND NOT VP_error THEN // 有阀位，判断停止动作结果
+        action_success := VP < last_VP + FT_zone AND VP > last_VP - FT_zone;
+        action_error := NOT action_success;
+    ELSIF mode = STOPPING_STATUS THEN // 无阀位，停止动作无法判断，直接切换状态
+        mode := STOP_STATUS;
+        action_TOF.STATE := B#16#0;
+    ELSIF action AND NOT VP_error THEN // 其它3个动作在信号结束时只能有阀位时判断失败情况
+        IF mode = CLOSING_STATUS THEN // 关动作判断是否失败
+            action_error := VP > last_VP - FT_zone;
+        ELSIF mode = OPENNING_STATUS THEN // 开动作判断是否失败
+            action_error := VP < last_VP + FT_zone;
+        ELSIF mode = POSITION_STATUS THEN // 定位动作判断是否失败
+            // 这里无需考虑目标阀位对动作的影响，因为进入目标阀位后必定不在 POSITION_STATUS 状态下。
+            action_error := (VP < last_VP + FT_zone) AND (VP > last_VP - FT_zone);
         END_IF;
     END_IF;
-    IF march_CMD AND mode <> MARCH_STATUS THEN
-        close_CMD := FALSE;
-        open_CMD := FALSE;
-        march_CMD := FALSE;
-        mode := MARCH_STATUS;
+END_IF;
+signal := signal_TOF.Q;
+
+// 提前结束无须本次检查
+IF action_success THEN
+    action_error := FALSE;
+END_IF;
+IF (action_error OR action_success) AND action THEN
+    mode := STOP_STATUS;
+    action := FALSE; // 用于屏蔽下方超时检查
+    action_TOF.STATE := B#16#0;
+END_IF;
+// 动作超时判断执行情况(即动作未能提前结束)
+IF NOT action_TOF.Q AND action THEN
+    // 隐含 NOT action_error AND NOT action_success
+    IF mode = STOPPING_STATUS THEN
+        // 无阀位时，STOPPING_STATUS 才会延伸到这里
+        // 不作检查，仅仅切换至已停状态
+        mode := STOP_STATUS;
+    ELSE
+        // 其余 CLOSING_STATUS OPENNING_STATUS POSITION_STATUS 3种状态
+        // 这3种状态能延伸到这里，一定因为动作失败
+        action_success := FALSE;
+        action_error := TRUE;
+        mode := STOP_STATUS;
     END_IF;
-    IF mode = MARCH_STATUS THEN
-        IF VP > VP_SP + FT_zone THEN //当设定值容错区低于阀位，关阀动作
-            close_action := TRUE;
-            open_action := FALSE;
-        ELSIF VP < VP_SP - FT_zone THEN //当设定值容错区高于阀位，开阀动作
-            close_action := FALSE;
-            open_action := TRUE;
-        ELSE //当设定值在阀位容错区内，停止动阀，复位定位命令
-            close_action := FALSE;
-            open_action := FALSE;
-            march_CMD := FALSE;
-            // 用stop_CMD启动 stop_action 和 STOP_STATUS
-            stop_CMD := TRUE;
-        END_IF;
-    END_IF;
-    //**********************
+END_IF;
+
+//**********************
+// 阀逻辑结束
+//**********************
 
     // 通用处理
     IF siRUNUPCNT=0 THEN
@@ -773,28 +612,28 @@ END_CASE;
 //Message with ALARM_8P
 //*******************
 IF pbALARM THEN
-    ALARM_8P_1
-    (EN_R:=TRUE,
-    ID:=16#EEEE,
-    EV_ID:=EV_ID,
-    SIG_1:=pb_SIG_1,
-    SIG_2:=0,
-    SIG_3:=0,
-    SIG_4:=0,
-    SIG_5:=0,
-    SIG_6:=0,
-    SIG_7:=0,
-    SIG_8:=0,
-    SD_1:=AUX_PR01,
-    SD_2:=AUX_PR02,
-    SD_3:=AUX_PR03,
-    SD_4:=AUX_PR04,
-    SD_5:=AUX_PR05,
-    SD_6:=AUX_PR06,
-    SD_7:=AUX_PR07,
-    SD_8:=AUX_PR08,
-    SD_9:=AUX_PR09,
-    SD_10:=AUX_PR10);
+    ALARM_8P_1(
+        EN_R:=TRUE,
+        ID:=16#EEEE,
+        EV_ID:=EV_ID,
+        SIG_1:=pb_SIG_1,
+        SIG_2:=0,
+        SIG_3:=0,
+        SIG_4:=0,
+        SIG_5:=0,
+        SIG_6:=0,
+        SIG_7:=0,
+        SIG_8:=0,
+        SD_1:=AUX_PR01,
+        SD_2:=AUX_PR02,
+        SD_3:=AUX_PR03,
+        SD_4:=AUX_PR04,
+        SD_5:=AUX_PR05,
+        SD_6:=AUX_PR06,
+        SD_7:=AUX_PR07,
+        SD_8:=AUX_PR08,
+        SD_9:=AUX_PR09,
+        SD_10:=AUX_PR10);
     QMSG_ERR:=ALARM_8P_1.ERROR;
     MSG_STAT:=ALARM_8P_1.STATUS;
     MSG_ACK:=ALARM_8P_1.ACK_STATE;

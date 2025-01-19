@@ -1,0 +1,399 @@
+﻿FUNCTION_BLOCK "Valve_Proc"
+TITLE='DP总线电动执行机构'
+VERSION:'1.0'
+KNOW_HOW_PROTECT
+AUTHOR:Goosy
+NAME:ValvePrc
+FAMILY:GooLib
+
+CONST
+    STOP_STATUS := W#16#0;
+    CLOSE_STATUS := W#16#1;
+    OPEN_STATUS := W#16#2;
+    STOPPING_STATUS := W#16#4;
+    CLOSING_STATUS := W#16#8;
+    OPENNING_STATUS := W#16#10;
+    POSITION_STATUS :=  W#16#20;
+    NO_ACTION := B#16#0;
+    OPEN_ACTION := B#16#1;
+    CLOSE_ACTION := B#16#2;
+    STOP_ACTION := B#16#3;
+    ESD_ACTION := B#16#4;
+    POSITION_ACTION := B#16#5;
+    INVALID_VALUE := -100;
+END_CONST
+
+VAR_INPUT
+    M_IB1 : BYTE;                                     // 主通道状态1采集值
+    M_IB2 : BYTE;                                     // 主通道状态2采集值
+    M_IB3 : BYTE;                                     // 主通道状态3采集值
+    M_IB6 : BYTE;                                     // 主通道力矩采集值
+    M_IB8 : BYTE;                                     // 主通道阀位采集值
+    S_IB1 : BYTE;                                     // 从通道状态1采集值
+    S_IB2 : BYTE;                                     // 从通道状态2采集值
+    S_IB3 : BYTE;                                     // 从通道状态3采集值
+    S_IB6 : BYTE;                                     // 从通道力矩采集值
+    S_IB8 : BYTE;                                     // 从通道阀位采集值
+    M_failed {S7_m_c := 'true'} : BOOL;               // 主通道出错
+    S_failed {S7_m_c := 'true'} : BOOL;               // 从通道出错
+    FT_zone {S7_m_c := 'true'} : INT := 2;            // 定位容错区
+    action_time {S7_m_c := 'true'} : DINT := 100000;  // 动作时间，完成阀动作的最长时间，在该时间后判断动作是否成功 (单位毫秒)
+    actionDR AT action_time : TIME;
+    signal_time {S7_m_c := 'true'} : DINT := 500;     // 信号时间，信号要保持持续的最短时间(单位毫秒 阀位有效时)
+    signalDR AT signal_time : TIME;
+END_VAR
+
+VAR_OUTPUT
+    M_QB1                            : BYTE ; // 主通道动作输出
+    M_QB2                            : BYTE ; // 主通道预置位置输出
+    S_QB1                            : BYTE ; // 从通道动作输出
+    S_QB2                            : BYTE ; // 从通道预置位置输出
+
+    CP             {S7_m_c := 'true'} : BOOL ; // 关到位
+    OP             {S7_m_c := 'true'} : BOOL ; // 开到位
+    remote         {S7_m_c := 'true'} : BOOL ; // 远程操作
+    local          {S7_m_c := 'true'} : BOOL ; // 本地操作
+    openning       {S7_m_c := 'true'} : BOOL ; // 执行器正在打开
+    closing        {S7_m_c := 'true'} : BOOL ; // 执行器正在关闭
+    CW             {S7_m_c := 'true'} : BOOL ; // 顺时针运动
+    CCW            {S7_m_c := 'true'} : BOOL ; // 逆时针运动
+
+    movement       {S7_m_c := 'true'} : BOOL ; // 中心柱移动
+    MT_AH          {S7_m_c := 'true'} : BOOL ; // 电机温度超限
+    alarm_KA       {S7_m_c := 'true'} : BOOL ; // 报警继电器
+    low_battery    {S7_m_c := 'true'} : BOOL ; // 电池电量低
+    cutoff_close   {S7_m_c := 'true'} : BOOL ; // 关阀时立即跳断
+    cutoff_open    {S7_m_c := 'true'} : BOOL ; // 开阀时立即跳断
+    alarm          {S7_m_c := 'true'} : BOOL ; // 阀门报警
+    phase_loss     {S7_m_c := 'true'} : BOOL ; // 电源掉相
+
+    error          {S7_m_c := 'true'} : BOOL ; // 阀体故障，无法操作
+    lost           {S7_m_c := 'true'} : BOOL ; // 通信故障，无法操作
+    action_success {S7_m_c := 'true'} : BOOL ; // 阀动作成功
+    action_error   {S7_m_c := 'true'} : BOOL ; // 阀动作错误
+    ESD_flag       {S7_m_c := 'true'} : BOOL ; // ESD 信号
+
+    VP             {S7_m_c := 'true'} : INT  ; // 阀位
+    torque         {S7_m_c := 'true'} : INT  ; // 力矩
+END_VAR
+
+VAR_IN_OUT
+    VP_SP {S7_m_c := 'true'} : INT := 50;     // 设定值
+    close_CMD {S7_m_c := 'true'} : BOOL;      // 关阀命令
+    open_CMD {S7_m_c := 'true'} : BOOL;       // 开阀命令
+    position_CMD {S7_m_c := 'true'} : BOOL;   // 定位命令
+    stop_CMD {S7_m_c := 'true'} : BOOL;       // 停止命令
+END_VAR
+
+VAR
+    // 0 中心柱移动
+    // 1 电机温度超限
+    // 2 报警继电器
+    // 3 本地操作
+    // 4 远程操作
+    // 5 电池电量低
+    // 6 顺时针运动
+    input_byte01 : BYTE;    // 状态1采集值
+    status1 AT input_byte01: ARRAY [0 .. 7] OF BOOL;
+
+    // 0 逆时针运动
+    // 1 在阀门关闭的限位动作
+    // 2 在阀门打开的限位动作
+    // 3 继电器 1 状态
+    // 4 继电器 2 状态
+    // 5 继电器 3 状态
+    // 6 继电器 4 状态
+    input_byte02 : BYTE;    // 状态2采集值
+    status2 AT input_byte02: ARRAY [0 .. 7] OF BOOL;
+
+    // 0 ESD 信号
+    // 1 关阀时立即跳断
+    // 2 开阀时立即跳断
+    // 3 阀门报警
+    // 4 电源掉相
+    // 5 执行器正在打开
+    // 6 执行器正在关闭
+    input_byte03 : BYTE;    // 状态3采集值
+    status3 AT input_byte03: ARRAY [0 .. 7] OF BOOL;
+
+    input_byte04 : BYTE;    // 非循环写故障
+    input_byte05 : BYTE;    // 非循环读故障
+    input_byte06 : BYTE;    // 力矩采集值
+    input_byte07 : BYTE;    // 保留
+    input_byte08 : BYTE;    // 阀位采集值
+    input_byte09 : BYTE;    // 保留
+    input_byte10 : BYTE;    // 保留
+    input_byte11 : BYTE;    // 保留
+    input_byte12 : BYTE;    // 保留
+
+    action_trigger  : BOOL; // 阀动作触发
+    action          : BOOL; // 正在动作
+    signal          : BOOL; // 动作输出信号
+    start_movement  : BOOL; // 开始移动
+    stop_movement   : BOOL; // 停止移动
+    movement_follow : BOOL; // 移动跟随
+    mode            : WORD; // 当前模式
+    last_mode       : WORD; // 上一模式
+    action_TOF      : TOF;
+    signal_TOF      : TOF;
+END_VAR
+
+VAR_TEMP
+    action_byte: BYTE; // 1:开阀 2:关阀 3:停止 4:ESD 5:定位
+    VP_SP_byte: BYTE;
+END_VAR
+
+BEGIN
+
+lost := M_failed AND S_failed;
+IF lost THEN
+    CP            := FALSE;
+    OP            := FALSE;
+    remote        := FALSE;
+    local         := FALSE;
+    openning      := FALSE;
+    closing       := FALSE;
+    CW            := FALSE;
+    CCW           := FALSE;
+
+    movement      := FALSE;
+    MT_AH         := FALSE;
+    alarm         := FALSE;
+    low_battery   := FALSE;
+    cutoff_close  := FALSE;
+    cutoff_open   := FALSE;
+    alarm         := FALSE;
+    phase_loss    := FALSE;
+
+    ESD_flag      := FALSE;
+    VP            := INVALID_VALUE;
+    torque        := INVALID_VALUE;
+    RETURN;
+END_IF;
+
+//**********************
+// 状态读取
+//**********************
+IF VP_SP < 0 THEN
+    VP_SP := 0;
+ELSIF VP_SP > 100 THEN
+    VP_SP := 100;
+END_IF;
+VP_SP_byte := INT_TO_BYTE(VP_SP);
+M_QB2 := VP_SP_byte;
+S_QB2 := VP_SP_byte;
+IF NOT M_failed THEN
+    input_byte01 := M_IB1;
+    input_byte02 := M_IB2;
+    input_byte03 := M_IB3;
+    input_byte06 := M_IB6;
+    input_byte08 := M_IB8;
+    torque := BYTE_TO_INT(M_IB6);
+    VP := BYTE_TO_INT(M_IB8);
+ELSE
+    input_byte01 := S_IB1;
+    input_byte02 := S_IB2;
+    input_byte03 := S_IB3;
+    input_byte06 := S_IB6;
+    input_byte08 := S_IB8;
+    torque := BYTE_TO_INT(S_IB6);
+    VP := BYTE_TO_INT(S_IB8);
+END_IF;
+
+CP            := status2[1];
+OP            := status2[2];
+remote        := status1[4];
+local         := status1[3];
+closing       := status3[6];
+openning      := status3[5];
+CW            := status1[6];
+CCW           := status2[0];
+
+movement      := status1[0];
+MT_AH         := status1[1];
+alarm_KA      := status1[2];
+low_battery   := status1[5];
+cutoff_close  := status3[1];
+cutoff_open   := status3[2];
+alarm         := status3[3];
+phase_loss    := status3[4];
+
+error         := MT_AH OR phase_loss; // 厂家说不清，只能保守取这2个
+ESD_flag      := status3[0];
+
+//**********************
+// 阀动作处理
+//**********************
+
+// 动作计时
+action := mode = STOPPING_STATUS OR mode = OPENNING_STATUS OR mode = CLOSING_STATUS OR mode = POSITION_STATUS; // 已隐含 remote AND NOT error AND NOT lost
+action_trigger := last_mode <> mode AND remote AND action;
+last_mode := mode;
+signal_TOF(
+    IN := action_trigger AND NOT error,
+    PT := signalDR);
+action_TOF(
+    IN := action_trigger AND NOT error,
+    PT := actionDR);
+start_movement := movement AND NOT movement_follow;
+stop_movement := NOT movement AND movement_follow;
+movement_follow := movement;
+// 重置动作错误
+IF action_trigger THEN
+    action_success := FALSE;
+    action_error := FALSE;
+END_IF;
+IF action_success THEN
+    action_error := FALSE;
+END_IF;
+
+// 现场和阀故障复位
+IF NOT remote OR error OR lost THEN
+    signal := FALSE;
+    action := FALSE;
+    close_CMD := FALSE;
+    open_CMD := FALSE;
+    position_CMD := FALSE;
+    stop_CMD := FALSE;
+    IF lost THEN
+        mode := STOP_STATUS;
+    ELSIF closing THEN
+        mode := CLOSING_STATUS;
+    ELSIF openning THEN
+        mode := OPENNING_STATUS;
+    ELSE
+        mode := STOPPING_STATUS;
+    END_IF;
+    RETURN;
+END_IF;
+
+// 停止命令优先
+IF stop_CMD THEN
+    IF mode = STOPPING_STATUS THEN
+        mode := STOP_STATUS; // 确保停止状态可以继续响应 stop_CMD
+    ELSE
+        mode := STOPPING_STATUS;
+        stop_CMD := FALSE;
+    END_IF;
+    close_CMD := FALSE;
+    open_CMD := FALSE;
+    position_CMD := FALSE;
+END_IF;
+
+// 停阀动作
+IF mode = STOPPING_STATUS THEN
+    action_byte := STOP_ACTION;
+    IF stop_movement THEN
+        action_success := TRUE;
+    END_IF;
+    // 停止状态的判定 1/2
+    IF action_success THEN
+        mode := STOP_STATUS;
+    END_IF;
+END_IF;
+// 复位动作
+IF mode = STOP_STATUS THEN
+    action_byte := NO_ACTION;
+END_IF;
+
+// 全开状态的判定
+IF OP AND mode <> CLOSING_STATUS AND mode <> POSITION_STATUS THEN
+    IF mode = OPENNING_STATUS THEN
+        action_success := TRUE;
+    END_IF;
+    mode := OPEN_STATUS;
+END_IF;
+// 复位动作
+IF mode = OPEN_STATUS THEN
+    open_CMD := FALSE;
+    action_byte := NO_ACTION;
+END_IF;
+
+// 全关状态的判定
+IF CP AND mode <> OPENNING_STATUS AND mode <> POSITION_STATUS THEN
+    IF mode = CLOSING_STATUS THEN
+        action_success := TRUE;
+    END_IF;
+    mode := CLOSE_STATUS;
+END_IF;
+// 复位动作
+IF mode = CLOSE_STATUS THEN
+    close_CMD := FALSE;
+    action_byte := NO_ACTION;
+END_IF;
+
+// 开阀
+IF open_CMD THEN
+    IF mode = OPENNING_STATUS THEN
+        mode := STOP_STATUS; // 确保 OPENNING_STATUS 可以继续响应 open_CMD
+    ELSE
+        mode := OPENNING_STATUS;
+        open_CMD := FALSE;
+    END_IF;
+    close_CMD := FALSE;
+    position_CMD := FALSE;
+END_IF;
+// 动作
+IF mode = OPENNING_STATUS THEN
+    action_byte := OPEN_ACTION;
+END_IF;
+
+// 关阀
+IF close_CMD THEN
+    IF mode = CLOSING_STATUS THEN
+        mode := STOP_STATUS; // 确保 CLOSING_STATUS 可以继续响应 close_CMD
+    ELSE
+        mode := CLOSING_STATUS;
+        close_CMD := FALSE;
+    END_IF;
+    position_CMD := FALSE;
+END_IF;
+// 动作
+IF mode = CLOSING_STATUS THEN
+    action_byte := CLOSE_ACTION;
+END_IF;
+
+// 指定阀位控制
+IF position_CMD THEN
+    IF mode = POSITION_STATUS THEN
+        mode := STOP_STATUS; // 确保 POSITION_STATUS 可以继续响应 position_CMD
+    ELSE
+        mode := POSITION_STATUS;
+        position_CMD := FALSE;
+    END_IF;
+END_IF;
+// 动作
+IF mode = POSITION_STATUS THEN
+    // 容错，执行器未必能精准控制阀位
+    IF VP - VP_SP < FT_zone AND VP_SP - VP < FT_zone AND NOT movement THEN
+        action_success := TRUE;
+    END_IF;
+    IF action_success THEN
+        // 停止状态的判定 2/2
+        mode := STOP_STATUS;
+    ELSE
+        action_byte := POSITION_ACTION;
+    END_IF;
+END_IF;
+
+// 判断动作是否失败
+// 在signal信号结束时沿判断
+IF NOT signal_TOF.Q AND signal AND mode = STOPPING_STATUS THEN
+    action_error := TRUE;
+END_IF;
+signal := signal_TOF.Q;
+// 在action信号结束时判断
+IF NOT action_TOF.Q AND action THEN
+    action_error := TRUE;
+    mode := STOP_STATUS; // 确保action复位
+END_IF;
+
+// 动作输出
+IF NOT M_failed THEN
+    M_QB1 := action_byte;
+    S_QB1 := NO_ACTION;
+ELSE
+    M_QB1 := NO_ACTION;
+    S_QB1 := action_byte;
+END_IF;
+END_FUNCTION_BLOCK

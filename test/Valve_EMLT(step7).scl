@@ -1,0 +1,112 @@
+FUNCTION_BLOCK "Valve_EMLT"
+CONST
+    S7_ZERO := 0;
+    S7_SPAN := 27648;
+    S7_AI_MIN := -32768;
+    S7_AI_MIN_WORD := W#16#8000;
+    S7_AI_MAX := 32767;
+    S7_AI_MAX_WORD := W#16#7FFF;
+    LOOP_0 := W#16#0; // 无回路控制
+    LOOP_1 := W#16#1; // 单回路控制
+    LOOP_2 := W#16#2; // 双回路控制
+    LOOP_3 := W#16#3; // 三回路控制
+END_CONST
+
+VAR_INPUT
+    ENOpen : BOOL := TRUE;
+    ENClose : BOOL := TRUE;
+    ENStop : BOOL := TRUE;
+    ENVP : BOOL := TRUE;
+    HSO : BOOL;
+    HSC : BOOL;
+    HSS : BOOL;
+    HSR : BOOL;
+    remote : BOOL := TRUE;
+    duration : DINT := 30000;  // 阀动作时长
+    mode : WORD := LOOP_2;
+END_VAR
+
+VAR_OUTPUT
+    AI : WORD;
+    iAI AT AI : INT;
+    OP : BOOL;
+    CP : BOOL;
+    RL : BOOL;
+    ER : BOOL;
+END_VAR
+
+VAR
+    open : BOOL;
+    close : BOOL;
+    error : BOOL;
+    position : INT := S7_ZERO;
+    step_TON : TON;
+END_VAR
+
+VAR_TEMP
+    step : TIME;
+    iStep AT step : DINT;
+    on_step : BOOL;
+END_VAR
+
+BEGIN
+iStep := duration / 550;
+on_step := step_TON.Q;
+step_TON(
+        IN := NOT on_step,
+        PT := step);
+
+IF position >= S7_SPAN THEN
+    position := S7_SPAN;
+    OP := TRUE;
+    CP := FALSE;
+ELSIF position <= S7_ZERO THEN
+    position := S7_ZERO;
+    OP := FALSE;
+    CP := TRUE;
+ELSE
+    OP := FALSE;
+    CP := FALSE;
+END_IF;
+
+IF remote AND NOT error AND on_step THEN
+    IF mode = LOOP_1 THEN // 单回路控制
+        open := NOT OP AND HSR AND ENOpen;
+        close := NOT CP AND NOT HSR AND ENClose;
+    ELSIF mode = LOOP_2 THEN // 双回路控制
+        open := NOT OP AND HSO AND ENOpen;
+        close := NOT CP AND HSC AND ENClose;
+    ELSIF mode = LOOP_3 THEN // 三回路控制
+        IF (HSS AND ENStop) OR (HSC AND HSO) THEN // 停止信号或错误信号
+            open := FALSE;
+            close := FALSE;
+        ELSIF NOT OP AND HSO AND ENOpen THEN
+            open := TRUE;
+            close := FALSE;
+        ELSIF NOT CP AND HSC AND ENClose THEN
+            open := FALSE;
+            close := TRUE;
+        END_IF;
+        IF OP THEN
+            open := FALSE;
+        ELSIF CP THEN
+            close := FALSE;
+        END_IF;
+    END_IF;
+    // 开阀
+    IF open THEN
+        position := position + 50;
+    END_IF;
+    // 关阀
+    IF close THEN
+        position := position - 50;
+    END_IF;
+END_IF;
+IF ENVP THEN
+    iAI := position;
+ELSE
+    iAI := S7_AI_MIN;
+END_IF;
+RL := remote;
+ER := error;
+END_FUNCTION_BLOCK
